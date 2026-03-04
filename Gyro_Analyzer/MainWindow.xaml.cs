@@ -772,6 +772,21 @@ namespace Gyro_Analyzer
             textBox_StandardDeviation_R_X.Text = "0.00";
             textBox_Average_R_Y.Text = "0.00";
             textBox_StandardDeviation_R_Y.Text = "0.00";
+
+            // 선형오차환산계수 모드 진입 시 절차 초기화
+            if (textBlock_StepName == null) return;
+
+            if (currentMode == 1)
+            {
+                linearTestStep = 0;
+                UpdateLinearTestDisplay();
+            }
+            else
+            {
+                textBlock_StepName.Text        = "선형오차 모드를 선택하세요";
+                textBlock_StepIndex.Text       = "-";
+                textBlock_CurrentVelocity.Text = "-";
+            }
         }
 
         private void textBox_Average_X_TextChanged(object sender, TextChangedEventArgs e)
@@ -800,20 +815,65 @@ namespace Gyro_Analyzer
 
         }
 
-        #region Excel Export
+        #region Excel Export / 시험 절차
 
         string excelFilePath = "";
 
+        // ─────────────────────────────────────────────────────────────
+        // 선형오차환산계수 시험 절차
+        //   Step  0      : 영점 시험 (X=Y=0) → R_X→D27, R_Y→D28
+        //   Step  1~ 21  : X축 시험 (-100~+100, 10단위) → R_X→E6~E26
+        //   Step 22~ 42  : Y축 시험 (-100~+100, 10단위) → R_Y→F6~F26
+        // ─────────────────────────────────────────────────────────────
+        int linearTestStep = 0;
+        const int LINEAR_TOTAL_STEPS = 43; // 0~42
+
+        private string GetStepName(int step)
+        {
+            if (step == 0)  return "① 영점 시험  (X=0, Y=0)";
+            if (step <= 21) return $"② X축 시험  (Y=0)";
+            return                $"③ Y축 시험  (X=0)";
+        }
+
+        private string GetStepVelocity(int step)
+        {
+            if (step == 0)  return "X=0 / Y=0";
+            if (step <= 21) return $"X = {-100 + (step - 1) * 10} °/s";
+            return                 $"Y = {-100 + (step - 22) * 10} °/s";
+        }
+
+        private void UpdateLinearTestDisplay()
+        {
+            if (currentMode != 1) return;
+            textBlock_StepName.Text      = GetStepName(linearTestStep);
+            textBlock_StepIndex.Text     = $"{linearTestStep + 1} / {LINEAR_TOTAL_STEPS}";
+            textBlock_CurrentVelocity.Text = GetStepVelocity(linearTestStep);
+        }
+
+        private void Button_PrevStep_Click(object sender, RoutedEventArgs e)
+        {
+            if (currentMode != 1) return;
+            if (linearTestStep > 0) linearTestStep--;
+            UpdateLinearTestDisplay();
+        }
+
+        private void Button_NextStep_Click(object sender, RoutedEventArgs e)
+        {
+            if (currentMode != 1) return;
+            if (linearTestStep < LINEAR_TOTAL_STEPS - 1) linearTestStep++;
+            UpdateLinearTestDisplay();
+        }
+
         private void Button_SelectExcel_Click(object sender, RoutedEventArgs e)
         {
-            System.Windows.Forms.OpenFileDialog dlg = new System.Windows.Forms.OpenFileDialog();
+            var dlg = new System.Windows.Forms.OpenFileDialog();
             dlg.Filter = "Excel Files|*.xlsx;*.xls";
-            dlg.Title = "엑셀 템플릿 파일 선택";
+            dlg.Title  = "엑셀 템플릿 파일 선택";
 
             if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
             {
                 excelFilePath = dlg.FileName;
-                MessageBox.Show($"파일이 선택되었습니다:\n{excelFilePath}", "파일 선택 완료");
+                MessageBox.Show($"파일 선택 완료:\n{System.IO.Path.GetFileName(excelFilePath)}", "완료");
             }
         }
 
@@ -824,7 +884,6 @@ namespace Gyro_Analyzer
                 MessageBox.Show("먼저 엑셀 파일을 선택해주세요.", "파일 미선택", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-
             if (!File.Exists(excelFilePath))
             {
                 MessageBox.Show("선택한 엑셀 파일이 존재하지 않습니다.", "파일 오류", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -833,114 +892,96 @@ namespace Gyro_Analyzer
 
             try
             {
-                if (currentMode == 1) // 선형오차, 환산계수
-                {
-                    WriteLinearErrorData();
-                }
-                else if (currentMode == 2) // 편류안정
-                {
-                    WriteDriftStabilityData();
-                }
+                if (currentMode == 1)       WriteLinearErrorData();
+                else if (currentMode == 2)  WriteDriftStabilityData();
                 else
-                {
-                    MessageBox.Show("현재 시험 모드는 엑셀 내보내기를 지원하지 않습니다.", "미지원 모드", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
+                    MessageBox.Show("현재 시험 모드는 엑셀 내보내기를 지원하지 않습니다.", "미지원 모드",
+                                    MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"엑셀 파일 쓰기 중 오류가 발생했습니다:\n{ex.Message}", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"엑셀 쓰기 오류:\n{ex.Message}", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
         private void WriteLinearErrorData()
         {
-            // 입력각속도 값 읽기 및 검증
-            if (string.IsNullOrWhiteSpace(textBox_InputAngularVelocity.Text))
-            {
-                MessageBox.Show("입력각속도를 입력해주세요.", "입력 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            double inputAngularVelocity;
-            if (!double.TryParse(textBox_InputAngularVelocity.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out inputAngularVelocity))
-            {
-                MessageBox.Show("입력각속도는 숫자여야 합니다.", "입력 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            // 입력각속도에 따른 행 번호 계산
-            // -100 → 행 6, -90 → 행 7, ..., 100 → 행 26
-            int rowNumber = (int)((inputAngularVelocity + 100) / 10) + 6;
-
-            if (rowNumber < 6 || rowNumber > 26)
-            {
-                MessageBox.Show("입력각속도는 -100부터 100까지 10 단위로 입력해주세요.\n예: -100, -90, -80, ..., 90, 100", "범위 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            // 평균값 읽기
-            double avgX = Convert.ToDouble(textBox_Average_X.Text);
-            double avgY = Convert.ToDouble(textBox_Average_Y.Text);
-
-            // 엑셀 파일 열기
             using (var workbook = new XLWorkbook(excelFilePath))
             {
-                // 시트 찾기 - "(2)(3)선형오차환산계수" 또는 유사한 이름
-                IXLWorksheet worksheet = null;
-                foreach (var ws in workbook.Worksheets)
-                {
-                    if (ws.Name.Contains("선형오차") || ws.Name.Contains("환산계수"))
-                    {
-                        worksheet = ws;
-                        break;
-                    }
-                }
+                // 시트 검색
+                IXLWorksheet ws = null;
+                foreach (var s in workbook.Worksheets)
+                    if (s.Name.Contains("선형오차") || s.Name.Contains("환산계수")) { ws = s; break; }
 
-                if (worksheet == null)
+                if (ws == null)
                 {
-                    MessageBox.Show("'선형오차환산계수' 시트를 찾을 수 없습니다.", "시트 오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show("'선형오차환산계수' 시트를 찾을 수 없습니다.", "시트 오류",
+                                    MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
 
-                // 데이터 기입
-                worksheet.Cell(rowNumber, 5).Value = avgX; // E열 (5번째 열)
-                worksheet.Cell(rowNumber, 6).Value = avgY; // F열 (6번째 열)
+                double rX = Convert.ToDouble(textBox_Average_R_X.Text);
+                double rY = Convert.ToDouble(textBox_Average_R_Y.Text);
 
-                // 파일 저장
+                string detail;
+
+                if (linearTestStep == 0)
+                {
+                    // 영점 시험: R_X→D27, R_Y→D28
+                    ws.Cell(27, 4).Value = rX;
+                    ws.Cell(28, 4).Value = rY;
+                    detail = $"D27 (R_X) = {rX}\nD28 (R_Y) = {rY}";
+                }
+                else if (linearTestStep <= 21)
+                {
+                    // X축 시험: R_X → E6~E26
+                    int row = 5 + linearTestStep; // step1→E6(row6), step21→E26(row26)
+                    int velocity = -100 + (linearTestStep - 1) * 10;
+                    ws.Cell(row, 5).Value = rX;
+                    detail = $"E{row} (R_X, {velocity}°/s) = {rX}";
+                }
+                else
+                {
+                    // Y축 시험: R_Y → F6~F26
+                    int row = 5 + (linearTestStep - 21); // step22→F6(row6), step42→F26(row26)
+                    int velocity = -100 + (linearTestStep - 22) * 10;
+                    ws.Cell(row, 6).Value = rY;
+                    detail = $"F{row} (R_Y, {velocity}°/s) = {rY}";
+                }
+
                 workbook.Save();
 
-                MessageBox.Show($"데이터가 성공적으로 기입되었습니다.\n입력각속도: {inputAngularVelocity}\n행: {rowNumber}\nWx: {avgX}, Wy: {avgY}", "성공", MessageBoxButton.OK, MessageBoxImage.Information);
+                bool isLast = (linearTestStep == LINEAR_TOTAL_STEPS - 1);
+                string nextMsg = isLast ? "\n\n✔ 모든 단계 완료!" : "\n\n→ 다음 단계로 이동합니다.";
+
+                MessageBox.Show($"기입 완료!\n\n단계: {GetStepName(linearTestStep)}\n{detail}{nextMsg}",
+                                "성공", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                if (!isLast)
+                {
+                    linearTestStep++;
+                    UpdateLinearTestDisplay();
+                }
             }
         }
 
         private void WriteDriftStabilityData()
         {
-            // 편류안정 데이터 기입 (향후 구현)
-            // E20, F20부터 아래로 데이터 추가
-            
             using (var workbook = new XLWorkbook(excelFilePath))
             {
-                // 시트 찾기 - "(5)편류안정"
-                IXLWorksheet worksheet = null;
-                foreach (var ws in workbook.Worksheets)
-                {
-                    if (ws.Name.Contains("편류안정"))
-                    {
-                        worksheet = ws;
-                        break;
-                    }
-                }
+                IXLWorksheet ws = null;
+                foreach (var s in workbook.Worksheets)
+                    if (s.Name.Contains("편류안정")) { ws = s; break; }
 
-                if (worksheet == null)
+                if (ws == null)
                 {
-                    MessageBox.Show("'편류안정' 시트를 찾을 수 없습니다.", "시트 오류", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show("'편류안정' 시트를 찾을 수 없습니다.", "시트 오류",
+                                    MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
 
-                // 현재는 평균값만 기입 (향후 로그 데이터 전체를 기입하도록 수정 가능)
-                // TODO: 실제 로그 데이터를 E20, F20부터 순차적으로 기입하는 로직 구현
-                
-                MessageBox.Show("편류안정 데이터 기입 기능은 아직 구현 중입니다.", "개발 중", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show("편류안정 데이터 기입 기능은 준비 중입니다.", "개발 중",
+                                MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
 
