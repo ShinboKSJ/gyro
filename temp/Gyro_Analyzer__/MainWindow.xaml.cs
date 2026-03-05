@@ -20,8 +20,6 @@ using System.Windows.Threading;
 
 
 using NationalInstruments.DAQmx;
-using ClosedXML.Excel;
-using System.Globalization;
 
 namespace Gyro_Analyzer
 {
@@ -157,9 +155,9 @@ namespace Gyro_Analyzer
                     MessageBox.Show("DAQ 연결을 확인해 주세요.");
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                MessageBox.Show("DAQ 오류:\n" + ex.GetType().Name + "\n" + ex.Message + "\n\n" + ex.StackTrace, "DAQ 연결 오류");
+                MessageBox.Show("DAQ 연결을 확인해 주세요.");
             }
         }
 
@@ -224,16 +222,16 @@ namespace Gyro_Analyzer
 
                     runningTask.Start();
                 }
-                catch (Exception exception)
+                catch (DaqException exception)
                 {
                     // Display Errors
-                    MessageBox.Show("DAQ_Init 오류:\n" + exception.GetType().Name + "\n" + exception.Message + "\n\n" + exception.StackTrace, "DAQ Init 오류");
-                    if (runningTask != null)
-                    {
-                        runningTask.Stop();
-                        runningTask = null;
-                        myTask.Dispose();
-                    }
+                    MessageBox.Show(exception.Message);
+                    runningTask.Stop();
+                    // Dispose of the task
+                    runningTask = null;
+                    myTask.Dispose();
+                    //stopButton.Enabled = false;
+                    //startButton.Enabled = true;
                 }
             }
         }
@@ -772,21 +770,6 @@ namespace Gyro_Analyzer
             textBox_StandardDeviation_R_X.Text = "0.00";
             textBox_Average_R_Y.Text = "0.00";
             textBox_StandardDeviation_R_Y.Text = "0.00";
-
-            // 선형오차환산계수 모드 진입 시 절차 초기화
-            if (textBlock_StepName == null) return;
-
-            if (currentMode == 1)
-            {
-                linearTestStep = 0;
-                UpdateLinearTestDisplay();
-            }
-            else
-            {
-                textBlock_StepName.Text        = "선형오차 모드를 선택하세요";
-                textBlock_StepIndex.Text       = "-";
-                textBlock_CurrentVelocity.Text = "-";
-            }
         }
 
         private void textBox_Average_X_TextChanged(object sender, TextChangedEventArgs e)
@@ -814,178 +797,6 @@ namespace Gyro_Analyzer
                 grid_Mode.Visibility = Visibility.Hidden;
 
         }
-
-        #region Excel Export / 시험 절차
-
-        string excelFilePath = "";
-
-        // ─────────────────────────────────────────────────────────────
-        // 선형오차환산계수 시험 절차
-        //   Step  0      : 영점 시험 (X=Y=0) → R_X→D27, R_Y→D28
-        //   Step  1~ 21  : X축 시험 (-100~+100, 10단위) → R_X→E6~E26
-        //   Step 22~ 42  : Y축 시험 (-100~+100, 10단위) → R_Y→F6~F26
-        // ─────────────────────────────────────────────────────────────
-        int linearTestStep = 0;
-        const int LINEAR_TOTAL_STEPS = 43; // 0~42
-
-        private string GetStepName(int step)
-        {
-            if (step == 0)  return "① 영점 시험  (X=0, Y=0)";
-            if (step <= 21) return $"② X축 시험  (Y=0)";
-            return                $"③ Y축 시험  (X=0)";
-        }
-
-        private string GetStepVelocity(int step)
-        {
-            if (step == 0)  return "X=0 / Y=0";
-            if (step <= 21) return $"X = {-100 + (step - 1) * 10} °/s";
-            return                 $"Y = {-100 + (step - 22) * 10} °/s";
-        }
-
-        private void UpdateLinearTestDisplay()
-        {
-            if (currentMode != 1) return;
-            textBlock_StepName.Text      = GetStepName(linearTestStep);
-            textBlock_StepIndex.Text     = $"{linearTestStep + 1} / {LINEAR_TOTAL_STEPS}";
-            textBlock_CurrentVelocity.Text = GetStepVelocity(linearTestStep);
-        }
-
-        private void Button_PrevStep_Click(object sender, RoutedEventArgs e)
-        {
-            if (currentMode != 1) return;
-            if (linearTestStep > 0) linearTestStep--;
-            UpdateLinearTestDisplay();
-        }
-
-        private void Button_NextStep_Click(object sender, RoutedEventArgs e)
-        {
-            if (currentMode != 1) return;
-            if (linearTestStep < LINEAR_TOTAL_STEPS - 1) linearTestStep++;
-            UpdateLinearTestDisplay();
-        }
-
-        private void Button_SelectExcel_Click(object sender, RoutedEventArgs e)
-        {
-            var dlg = new System.Windows.Forms.OpenFileDialog();
-            dlg.Filter = "Excel Files|*.xlsx;*.xls";
-            dlg.Title  = "엑셀 템플릿 파일 선택";
-
-            if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-            {
-                excelFilePath = dlg.FileName;
-                MessageBox.Show($"파일 선택 완료:\n{System.IO.Path.GetFileName(excelFilePath)}", "완료");
-            }
-        }
-
-        private void Button_WriteToExcel_Click(object sender, RoutedEventArgs e)
-        {
-            if (string.IsNullOrEmpty(excelFilePath))
-            {
-                MessageBox.Show("먼저 엑셀 파일을 선택해주세요.", "파일 미선택", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            if (!File.Exists(excelFilePath))
-            {
-                MessageBox.Show("선택한 엑셀 파일이 존재하지 않습니다.", "파일 오류", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-
-            try
-            {
-                if (currentMode == 1)       WriteLinearErrorData();
-                else if (currentMode == 2)  WriteDriftStabilityData();
-                else
-                    MessageBox.Show("현재 시험 모드는 엑셀 내보내기를 지원하지 않습니다.", "미지원 모드",
-                                    MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"엑셀 쓰기 오류:\n{ex.Message}", "오류", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private void WriteLinearErrorData()
-        {
-            using (var workbook = new XLWorkbook(excelFilePath))
-            {
-                // 시트 검색
-                IXLWorksheet ws = null;
-                foreach (var s in workbook.Worksheets)
-                    if (s.Name.Contains("선형오차") || s.Name.Contains("환산계수")) { ws = s; break; }
-
-                if (ws == null)
-                {
-                    MessageBox.Show("'선형오차환산계수' 시트를 찾을 수 없습니다.", "시트 오류",
-                                    MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-
-                double rX = Convert.ToDouble(textBox_Average_R_X.Text);
-                double rY = Convert.ToDouble(textBox_Average_R_Y.Text);
-
-                string detail;
-
-                if (linearTestStep == 0)
-                {
-                    // 영점 시험: R_X→D27, R_Y→D28
-                    ws.Cell(27, 4).Value = rX;
-                    ws.Cell(28, 4).Value = rY;
-                    detail = $"D27 (R_X) = {rX}\nD28 (R_Y) = {rY}";
-                }
-                else if (linearTestStep <= 21)
-                {
-                    // X축 시험: R_X → E6~E26
-                    int row = 5 + linearTestStep; // step1→E6(row6), step21→E26(row26)
-                    int velocity = -100 + (linearTestStep - 1) * 10;
-                    ws.Cell(row, 5).Value = rX;
-                    detail = $"E{row} (R_X, {velocity}°/s) = {rX}";
-                }
-                else
-                {
-                    // Y축 시험: R_Y → F6~F26
-                    int row = 5 + (linearTestStep - 21); // step22→F6(row6), step42→F26(row26)
-                    int velocity = -100 + (linearTestStep - 22) * 10;
-                    ws.Cell(row, 6).Value = rY;
-                    detail = $"F{row} (R_Y, {velocity}°/s) = {rY}";
-                }
-
-                workbook.Save();
-
-                bool isLast = (linearTestStep == LINEAR_TOTAL_STEPS - 1);
-                string nextMsg = isLast ? "\n\n✔ 모든 단계 완료!" : "\n\n→ 다음 단계로 이동합니다.";
-
-                MessageBox.Show($"기입 완료!\n\n단계: {GetStepName(linearTestStep)}\n{detail}{nextMsg}",
-                                "성공", MessageBoxButton.OK, MessageBoxImage.Information);
-
-                if (!isLast)
-                {
-                    linearTestStep++;
-                    UpdateLinearTestDisplay();
-                }
-            }
-        }
-
-        private void WriteDriftStabilityData()
-        {
-            using (var workbook = new XLWorkbook(excelFilePath))
-            {
-                IXLWorksheet ws = null;
-                foreach (var s in workbook.Worksheets)
-                    if (s.Name.Contains("편류안정")) { ws = s; break; }
-
-                if (ws == null)
-                {
-                    MessageBox.Show("'편류안정' 시트를 찾을 수 없습니다.", "시트 오류",
-                                    MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-
-                MessageBox.Show("편류안정 데이터 기입 기능은 준비 중입니다.", "개발 중",
-                                MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-        }
-
-        #endregion
     }
 
     public class UpdateLog
